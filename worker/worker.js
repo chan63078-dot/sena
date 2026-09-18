@@ -1,9 +1,8 @@
 // worker.js — 세븐나이츠 리버스 메타봇 스킬 서버
-// Phase 1 / Milestone 1a: 오픈빌더 스킬 요청 → 동기 응답 (콜백 없음, 5초 내)
-// 데이터는 임시 스텁. 다음 단계(M1b)에서 findComp()만 Firestore 조회로 교체한다.
+// Phase 1 / Milestone 1b: 오픈빌더 스킬 요청 → Firestore `공개` 컬렉션 조회 → 동기 응답(5초 내)
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     // 오픈빌더는 POST로 스킬 요청을 보낸다. 그 외 요청은 헬스체크로 처리.
     if (request.method !== "POST") {
       return new Response("OK", { status: 200 });
@@ -17,9 +16,7 @@ export default {
     }
 
     const utterance = (body?.userRequest?.utterance || "").trim();
-
-    // ↓ M1b에서 이 한 줄을 Firestore 조회로 바꾸면 된다.
-    const comp = findComp(utterance);
+    const comp = await findComp(utterance, env);
 
     if (!comp) {
       return json(skillText(
@@ -45,24 +42,39 @@ function skillText(text) {
   };
 }
 
-// ── 데이터 (임시 스텁 — M1b에서 Firestore로 교체) ──────
-const SAMPLE = [
-  {
-    콘텐츠타입: "공성전",
-    조합명: "루디 (나타/리나)",
-    키워드: ["공성전루디", "루디나타", "루디리나", "나타리나"],
-    영웅: [
-      { 이름: "리나", 진형: "앞줄", 장비: "성기사 생명력%", 부옵: "생명력 최대한", 추천펫: "윈디" },
-      { 이름: "미호", 진형: "앞줄", 장비: "복수자 치확/모공%", 부옵: "치확100·약공46·모공 최대한", 코멘트: "속공 1순위" },
-      { 이름: "나타", 진형: "뒷줄", 장비: "복수자 치확/모공%", 부옵: "치피·약공46·모공 최대한", 코멘트: "속공 2순위" },
-    ],
-    메모: "48턴에 도트 걸려있어야 쿨돔",
-  },
-];
-
-function findComp(utterance) {
+// ── Firestore 조회 (M1b: `공개` 컬렉션, public-read) ────
+async function findComp(utterance, env) {
   const q = utterance.replace(/\s/g, "");
-  return SAMPLE.find((c) => c.키워드.some((k) => q.includes(k)));
+  const comps = await fetchPublicComps(env.FIRESTORE_PROJECT_ID);
+  return comps.find((c) => (c.키워드 || []).some((k) => q.includes(k)));
+}
+
+async function fetchPublicComps(projectId) {
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/공개`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.documents || []).map((doc) => unwrapFields(doc.fields));
+}
+
+// Firestore REST 문서 형식({ stringValue, arrayValue, mapValue, ... })을 평범한 JS 값으로 변환
+function unwrapFields(fields) {
+  const obj = {};
+  for (const [key, value] of Object.entries(fields || {})) {
+    obj[key] = unwrapValue(value);
+  }
+  return obj;
+}
+
+function unwrapValue(value) {
+  if (value.stringValue !== undefined) return value.stringValue;
+  if (value.integerValue !== undefined) return Number(value.integerValue);
+  if (value.doubleValue !== undefined) return value.doubleValue;
+  if (value.booleanValue !== undefined) return value.booleanValue;
+  if (value.nullValue !== undefined) return null;
+  if (value.arrayValue !== undefined) return (value.arrayValue.values || []).map(unwrapValue);
+  if (value.mapValue !== undefined) return unwrapFields(value.mapValue.fields);
+  return null;
 }
 
 function formatComp(c) {

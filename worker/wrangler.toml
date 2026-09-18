@@ -1,3 +1,6 @@
 name = "sena-meta-bot"
 main = "worker.js"
 compatibility_date = "2026-09-18"
+
+[vars]
+FIRESTORE_PROJECT_ID = "sena-meta-bot"
